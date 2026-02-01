@@ -93,8 +93,8 @@ class CIFARResNet(nn.Module):
             )
         else:
             downsample = None
-        layers = [block(in_planes, out_planes, stride=stride, downsample=downsample, batch_norm=self.batch_norm, num_groups=self.num_groups)]
+        layers = [block(in_planes, out_planes, stride=stride, downsample=downsample, norm=self.norm, num_groups=self.num_groups)]
         for _ in range(1, num_blocks):
-            layers.append(block(out_planes * block.expansion, out_planes, stride=1, downsample=None, batch_norm=self.batch_norm, num_groups=self.num_groups))
+            layers.append(block(out_planes * block.expansion, out_planes, stride=1, downsample=None, norm=self.norm, num_groups=self.num_groups))
             
         return nn.Sequential(*layers)
