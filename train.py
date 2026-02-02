@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, random_split, Subset
-from torchvision.datasets import CIFAR10, CIFAR100
+from torchvision.datasets import CIFAR10, CIFAR100, VisionDataset
 from torchvision import transforms as T
 
 from model import resnet_config, CIFARResNet
@@ -18,7 +18,13 @@ from tqdm import tqdm
 from collections import defaultdict
 
 
-def get_device():
+def get_device() -> torch.device:
+    """Get the device on which to train and run the network
+
+    Returns:
+        torch.device: The device
+    """
+    
     if torch.cuda.is_available():
         device = torch.device("cuda")
     else:
@@ -28,6 +34,11 @@ def get_device():
 device = get_device()
 
 def set_seed(seed: int) -> None:
+    """Set all the different seeds, for experiment reproducibility
+
+    Args:
+        seed (int): The seed
+    """
     # Set python's seed
     random.seed(seed)
     
@@ -49,12 +60,25 @@ def set_seed(seed: int) -> None:
     
 
 def seed_worker(worker_id):
+    """Seed DataLoader workers, to ensure consistent training order and augmentations across runs
+
+    Args:
+        worker_id (_type_): The ID of the worker to be seeded
+    """
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
     
     
 def build_transform(cfg: OmegaConf) -> T.transforms:
+    """Build the training transform
+
+    Args:
+        cfg (OmegaConf): The configuration
+
+    Returns:
+        T.transforms: The composed transform
+    """
     transforms = []
     if cfg.data.augmentations.random_crop:
         transforms.append(T.RandomCrop([cfg.data.input_size[1], cfg.data.input_size[2]], padding=cfg.data.augmentations.random_crop_padding))
@@ -68,10 +92,19 @@ def build_transform(cfg: OmegaConf) -> T.transforms:
     transforms = T.Compose(transforms)
     return transforms
 
-def stratified_split(dataset, val_fraction, seed):
+
+def stratified_split(dataset: VisionDataset, val_fraction: float, seed: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Generate a stratified training/validation split
+
+    Args:
+        dataset (VisionDataset): The dataset to split
+        val_fraction (float): The fraction of items for the validation set
+        seed (int): The random number seed
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: The indices of dataset for training and validation
+    """
     targets = torch.tensor(dataset.targets)
-    num_samples = len(dataset)
-    num_val = int(num_samples * val_fraction)
 
     g = torch.Generator().manual_seed(seed)
 
@@ -93,6 +126,17 @@ def stratified_split(dataset, val_fraction, seed):
 
 
 def build_dataloaders(cfg: OmegaConf) -> Tuple[DataLoader, DataLoader]:
+    """Build the DataLoader objects for training and validation
+
+    Args:
+        cfg (OmegaConf): The Configuration
+
+    Raises:
+        Exception: Unsupported Dataset
+
+    Returns:
+        Tuple[DataLoader, DataLoader]: Training and Validation DataLoader objects
+    """
     
     # Set the trainsforms:
     transforms = build_transform(cfg)
@@ -171,6 +215,18 @@ def build_dataloaders(cfg: OmegaConf) -> Tuple[DataLoader, DataLoader]:
     
     
 def build_model(cfg: OmegaConf) -> nn.Module:
+    """Build the Model
+
+    Args:
+        cfg (OmegaConf): The configuration
+
+    Raises:
+        Exception: Incorrect Model Architecture
+        Exception: Unsupported Dataset
+
+    Returns:
+        nn.Module: ResNet
+    """
     arch = parse("resnet{configuration}", cfg.model.architecture)
     if arch is None:
         raise Exception("Incorrect Model Architecture")
@@ -187,7 +243,13 @@ def build_model(cfg: OmegaConf) -> nn.Module:
         base_channels = cfg.model.base_channels
     )
     
+    
 def kaiming_init(model: nn.Module) -> None:
+    """Explicitly initialize the model weights with kaiming initialization
+
+    Args:
+        model (nn.Module): The model to initialize
+    """
     for m in model.modules():
         if isinstance(m, nn.Conv2d):
             nn.init.kaiming_normal_(
@@ -211,6 +273,18 @@ def kaiming_init(model: nn.Module) -> None:
             
     
 def build_optimizer(optimizer_conf: OmegaConf, model: nn.Module) -> torch.optim.Optimizer:
+    """Build the Optimizer
+
+    Args:
+        optimizer_conf (OmegaConf): The configuration
+        model (nn.Module): The model to be optimized
+
+    Raises:
+        Exception: Unsupported Optimizer
+
+    Returns:
+        torch.optim.Optimizer: SGD or Adam optimizer
+    """
     if optimizer_conf.type == 'SGD':
         return torch.optim.SGD(
             model.parameters(),
@@ -230,6 +304,18 @@ def build_optimizer(optimizer_conf: OmegaConf, model: nn.Module) -> torch.optim.
     
     
 def build_scheduler(cfg: OmegaConf, optimizer: torch.optim.Optimizer) -> torch.optim.lr_scheduler.LRScheduler:
+    """Build the LR Scheduler
+
+    Args:
+        cfg (OmegaConf): The configuration
+        optimizer (torch.optim.Optimizer): The optimizer
+
+    Raises:
+        Exception: Unsupported LR Scheduler
+
+    Returns:
+        torch.optim.lr_scheduler.LRScheduler: The scheduler
+    """
     if cfg.scheduler.warmup is not None and cfg.scheduler.warmup.epochs > 0:
         warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer=optimizer,
@@ -268,10 +354,29 @@ def build_scheduler(cfg: OmegaConf, optimizer: torch.optim.Optimizer) -> torch.o
         
 
 def get_loss_fn(cfg: OmegaConf) -> nn.Module:
+    """Create the loss function
+
+    Args:
+        cfg (OmegaConf): The configuration
+
+    Returns:
+        nn.Module: CrossEntropyLoss object
+    """
     return nn.CrossEntropyLoss(label_smoothing=cfg.regularization.label_smoothing)
 
 
-def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim.Optimizer, loss_fn: nn.Module) -> None:
+def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim.Optimizer, loss_fn: nn.Module) -> Tuple[float, float]:
+    """Train the model for one epoch
+
+    Args:
+        model (nn.Module): The model to be trained
+        loader (DataLoader): The data on which to train
+        optimizer (torch.optim.Optimizer): The optimizer to update the model weights
+        loss_fn (nn.Module): The loss function
+
+    Returns:
+        Tuple[float, float]: Average model loss and accuracy across the training epoch
+    """
     global device
     
     model.train()
@@ -311,7 +416,17 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim
     return avg_loss, avg_acc
     
     
-def validate(model: nn.Module, loader: DataLoader, loss_fn: nn.Module) -> None:
+def validate(model: nn.Module, loader: DataLoader, loss_fn: nn.Module) -> Tuple[float, float]:
+    """Validate the model
+
+    Args:
+        model (nn.Module): The model
+        loader (DataLoader): The validation data
+        loss_fn (nn.Module): The loss function
+
+    Returns:
+        Tuple[float, float]: The model's average validation loss and accuracy for the epoch
+    """
     global device
     
     model.eval()
@@ -346,6 +461,11 @@ def validate(model: nn.Module, loader: DataLoader, loss_fn: nn.Module) -> None:
 
 
 def train(cfg: OmegaConf) -> None:
+    """Train a model, based on parameters in the config
+
+    Args:
+        cfg (OmegaConf): The configuration
+    """
     global device
     
     # Save the exact configuration used in the experiment
