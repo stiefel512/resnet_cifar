@@ -187,6 +187,28 @@ def build_model(cfg: OmegaConf) -> nn.Module:
         base_channels = cfg.model.base_channels
     )
     
+def kaiming_init(model: nn.Module) -> None:
+    for m in model.modules():
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(
+                m.weight,
+                mode='fan_out',
+                nonlinearity='relu'
+            )
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        elif isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(
+                m.weight,
+                mode='fan_in',
+                nonlinearity='relu'
+            )
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+            nn.init.ones_(m.weight)
+            nn.init.zeros_(m.bias)
+            
     
 def build_optimizer(optimizer_conf: OmegaConf, model: nn.Module) -> torch.optim.Optimizer:
     if optimizer_conf.type == 'SGD':
@@ -339,6 +361,7 @@ def train(cfg: OmegaConf) -> None:
     
     # Build the model
     model = build_model(cfg)
+    kaiming_init(model)
     model.to(device)
     
     # Get the optimizer
