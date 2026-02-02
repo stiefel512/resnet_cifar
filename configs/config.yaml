@@ -12,6 +12,7 @@ data:
   batch_size: 128
   num_workers: 4
   train_val_split: 0.2
+  stratify: true
   augmentations: 
     random_crop: true
     random_crop_padding: 4

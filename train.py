@@ -15,6 +15,7 @@ import numpy as np
 import os
 from pathlib import Path
 from tqdm import tqdm
+from collections import defaultdict
 
 
 def get_device():
@@ -67,6 +68,29 @@ def build_transform(cfg: OmegaConf) -> T.transforms:
     transforms = T.Compose(transforms)
     return transforms
 
+def stratified_split(dataset, val_fraction, seed):
+    targets = torch.tensor(dataset.targets)
+    num_samples = len(dataset)
+    num_val = int(num_samples * val_fraction)
+
+    g = torch.Generator().manual_seed(seed)
+
+    class_indices = defaultdict(list)
+    for idx, label in enumerate(targets):
+        class_indices[int(label)].append(idx)
+
+    train_idx = []
+    val_idx = []
+
+    for cls, idxs in class_indices.items():
+        idxs = torch.tensor(idxs)
+        perm = idxs[torch.randperm(len(idxs), generator=g)]
+        n_val = int(len(idxs) * val_fraction)
+        val_idx.append(perm[:n_val])
+        train_idx.append(perm[n_val:])
+
+    return torch.cat(train_idx), torch.cat(val_idx)
+
 
 def build_dataloaders(cfg: OmegaConf) -> Tuple[DataLoader, DataLoader]:
     
@@ -98,17 +122,28 @@ def build_dataloaders(cfg: OmegaConf) -> Tuple[DataLoader, DataLoader]:
         raise Exception("Unsupported Dataset")
         
     # Create the train/validation split
-    ds_size = len(train_ds)
-    val_size = int(ds_size * cfg.data.train_val_split)
-    train_size = ds_size - val_size
-    g = torch.Generator()
-    g.manual_seed(cfg.experiment.seed)
-    # Instead of using random split, use a random permutation and take in the new order
-    indices = torch.randperm(ds_size, generator=g)
-    train_inds = indices[:train_size]
-    val_inds = indices[train_size:]
-    train_dataset = Subset(train_ds, train_inds)
-    val_dataset = Subset(val_ds, val_inds)    
+    if cfg.data.stratify:
+        # Create a completely random training/validation split
+        ds_size = len(train_ds)
+        val_size = int(ds_size * cfg.data.train_val_split)
+        train_size = ds_size - val_size
+        g = torch.Generator()
+        g.manual_seed(cfg.experiment.seed)
+        # Instead of using random split, use a random permutation and take in the new order
+        indices = torch.randperm(ds_size, generator=g)
+        train_inds = indices[:train_size]
+        val_inds = indices[train_size:]
+        train_dataset = Subset(train_ds, train_inds)
+        val_dataset = Subset(val_ds, val_inds)    
+    else:
+        # Instead of using a purely random split, stratify.
+        train_idx, val_idx = stratified_split(
+            train_ds, 
+            cfg.data.train_val_split, 
+            cfg.experiment.seed
+        )
+        train_dataset = Subset(train_ds, train_idx)
+        val_dataset = Subset(val_ds, val_idx)
     
     # Ensure the same shuffle order and random augmentations per epoch
     train_g = torch.Generator()
