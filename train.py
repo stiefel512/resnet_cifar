@@ -9,7 +9,7 @@ from model import resnet_config, CIFARResNet
 from omegaconf import OmegaConf
 from typing import Tuple
 from parse import parse
-
+import pandas as pd
 import random
 import numpy as np
 import os
@@ -24,6 +24,7 @@ def get_device():
         device = torch.device("cpu")
     return device
 
+device = get_device()
 
 def set_seed(seed: int) -> None:
     # Set python's seed
@@ -102,13 +103,18 @@ def build_dataloaders(cfg: OmegaConf) -> Tuple[DataLoader, DataLoader]:
     train_size = ds_size - val_size
     g = torch.Generator()
     g.manual_seed(cfg.experiment.seed)
-    train_inds, val_inds = random_split(train_ds, [train_size, val_size], generator=g)
-    train_dataset = Subset(train_ds, train_inds.indices)
-    val_dataset = Subset(val_ds, val_inds.indices)    
+    # Instead of using random split, use a random permutation and take in the new order
+    indices = torch.randperm(ds_size, generator=g)
+    train_inds = indices[:train_size]
+    val_inds = indices[train_size:]
+    train_dataset = Subset(train_ds, train_inds)
+    val_dataset = Subset(val_ds, val_inds)    
     
     # Ensure the same shuffle order and random augmentations per epoch
-    g = torch.Generator()
-    g.manual_seed(cfg.experiment.seed)
+    train_g = torch.Generator()
+    train_g.manual_seed(cfg.experiment.seed)
+    val_g = torch.Generator()
+    val_g.manual_seed(cfg.experiment.seed + 1)
     
     train_dataloader = DataLoader(
         dataset = train_dataset,
@@ -116,7 +122,7 @@ def build_dataloaders(cfg: OmegaConf) -> Tuple[DataLoader, DataLoader]:
         shuffle = True,
         num_workers = cfg.data.num_workers,
         worker_init_fn = seed_worker,
-        generator = g
+        generator = train_g
     )
     val_dataloader = DataLoader(
         dataset = val_dataset,
@@ -124,7 +130,7 @@ def build_dataloaders(cfg: OmegaConf) -> Tuple[DataLoader, DataLoader]:
         shuffle=False,
         num_workers = cfg.data.num_workers,
         worker_init_fn = seed_worker,
-        generator = g
+        generator = val_g
     )
     return train_dataloader, val_dataloader
     
@@ -183,15 +189,13 @@ def build_scheduler(cfg: OmegaConf, optimizer: torch.optim.Optimizer) -> torch.o
         main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer=optimizer,
             T_max=remaining_epochs,
-            eta_min=cfg.scheduler.eta_min,
-            last_epoch=remaining_epochs
+            eta_min=cfg.scheduler.eta_min
         )
     elif cfg.scheduler.type == 'step':
         main_scheduler = torch.optim.lr_scheduler.StepLR(
             optimizer=optimizer, 
             step_size=cfg.scheduler.step_size,
-            gamma=0.1,
-            last_epoch=remaining_epochs
+            gamma=0.1
         )
     else:
         raise Exception("Unsupported LR Scheduler")
@@ -211,8 +215,13 @@ def get_loss_fn(cfg: OmegaConf) -> nn.Module:
 
 
 def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim.Optimizer, loss_fn: nn.Module) -> None:
+    global device
+    
     model.train()
-    device = get_device()
+    
+    train_loss = 0.0
+    correct = 0
+    total = 0
     
     for batch_idx, batch in enumerate(loader):
         # Unpack the batch
@@ -224,7 +233,9 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim
         
         # Compute the loss
         loss = loss_fn(pred, y)
-        
+        train_loss += loss.item() * x.size(0)
+        correct += (pred.argmax(dim=1) == y).sum().item()
+        total += y.size(0)
         # Backpropagation:
         # Clear the gradients
         optimizer.zero_grad()
@@ -238,15 +249,19 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim
             loss, current = loss.item(), batch_idx * len(x)
             print(f"loss: {loss:>7f}  [{current:>5d}/{len(loader.dataset):>5d}]")
     
+    avg_loss = train_loss / len(loader.dataset)
+    avg_acc = 100 * correct / total
+    return avg_loss, avg_acc
+    
     
 def validate(model: nn.Module, loader: DataLoader, loss_fn: nn.Module) -> None:
+    global device
+    
     model.eval()
     
     val_loss = 0.0
     correct = 0
     total = 0
-    
-    device = get_device()
     
     with torch.no_grad():  # Disable Gradient Calculation
         for batch_idx, batch in enumerate(loader):
@@ -274,6 +289,8 @@ def validate(model: nn.Module, loader: DataLoader, loss_fn: nn.Module) -> None:
 
 
 def train(cfg: OmegaConf) -> None:
+    global device
+    
     # Save the exact configuration used in the experiment
     out_dir = cfg.experiment.output_dir
     Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -287,7 +304,7 @@ def train(cfg: OmegaConf) -> None:
     
     # Build the model
     model = build_model(cfg)
-    model.to(get_device())
+    model.to(device)
     
     # Get the optimizer
     optimizer = build_optimizer(cfg.optimizer, model)
@@ -298,16 +315,28 @@ def train(cfg: OmegaConf) -> None:
     # Get the Loss Function
     loss_fn = get_loss_fn(cfg)
     
+    best_acc = 0
+    
+    results = []
+    
     # Train
     for epoch in range(cfg.training.max_epochs):
         # Train on the training data
-        train_one_epoch(model, train_loader, optimizer, loss_fn)
+        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, loss_fn)
         # Validate on the validation data
         val_loss, val_acc = validate(model, val_loader, loss_fn)
-        print(f"Epoch {epoch}:\tLoss {val_loss}, Acc {val_acc}")
-    
+        print(f"Epoch {epoch}:\tTrain Loss {train_loss}, Train Acc {train_acc}")
+        print(f"\t\t\t:Val Loss {val_loss}, Val Acc {val_acc}")
+
+        results.append({'epoch': epoch, 'train_loss': train_loss, 'train_acc': train_acc, 'val_loss': val_loss, 'val_acc': val_acc})
+        if val_acc >= best_acc:
+            best_acc = val_acc
+            torch.save(model.state_dict, f"{cfg.experiment.output_dir}/best.pt")
         # Advance the LR Scheduler
         scheduler.step()
+    
+    results_df = pd.DataFrame(results)
+    results_df.to_csv(f"{cfg.experiment.output_dir}/log.csv")
 
 
 if __name__ == "__main__":
