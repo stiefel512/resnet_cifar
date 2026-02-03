@@ -148,3 +148,19 @@ python train.py --config configs/config.yaml
 ```bash
 python test.tpy --config configs/config.yaml
 ```
+
+---
+
+## What I Would Do Next
+
+- Add label smoothing and compare calibration
+- Experiment with cosine learning rate scheduling
+- Compare against a ViT-style architecture under identical conditions
+- Extend analysis to CIFAR-100 to study class imbalance effects
+
+---
+
+## Takeaway
+
+This project focuses on understanding training behavior, not leaderboard performance.
+It serves as a controlled environment for studying optimization, regularization, and model diagnostics in convolutional neural networks.
