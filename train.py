@@ -5,6 +5,7 @@ from torchvision.datasets import CIFAR10, CIFAR100, VisionDataset
 from torchvision import transforms as T
 
 from model import resnet_config, CIFARResNet
+from utils import get_device
 
 from omegaconf import OmegaConf
 from typing import Tuple
@@ -17,19 +18,6 @@ from pathlib import Path
 from tqdm import tqdm
 from collections import defaultdict
 
-
-def get_device() -> torch.device:
-    """Get the device on which to train and run the network
-
-    Returns:
-        torch.device: The device
-    """
-    
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
-    return device
 
 device = get_device()
 
@@ -509,7 +497,7 @@ def train(cfg: OmegaConf) -> None:
         results.append({'epoch': epoch, 'train_loss': train_loss, 'train_acc': train_acc, 'val_loss': val_loss, 'val_acc': val_acc})
         if val_acc >= best_acc:
             best_acc = val_acc
-            torch.save(model.state_dict, f"{cfg.experiment.output_dir}/best.pt")
+            torch.save(model.state_dict(), f"{cfg.experiment.output_dir}/best.pt")
         # Advance the LR Scheduler
         scheduler.step()
     

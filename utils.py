@@ -24,3 +24,17 @@ def get_norm(norm: Literal["batch", "group"], num_channels: int, num_groups: int
         return nn.BatchNorm2d(num_features=num_channels)
     else:
         return nn.GroupNorm(num_groups=num_groups, num_channels=num_channels)
+    
+
+def get_device() -> torch.device:
+    """Get the device on which to train and run the network
+
+    Returns:
+        torch.device: The device
+    """
+    
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    return device
