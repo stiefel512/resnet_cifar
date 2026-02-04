@@ -50,6 +50,8 @@ A custom ResNet-18–style architecture adapted for CIFAR-10:
 
 All convolutional and linear layers were initialized using Kaiming normal initialization for ReLU networks; normalization layers were initialized to identity. 
 
+Following He et al., the last normalization layer in each residual branch was zero-initialized so that residual blocks start as identity mappings.
+
 ---
 
 ## Training Setup

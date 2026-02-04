@@ -5,6 +5,7 @@ from torchvision.datasets import CIFAR10, CIFAR100, VisionDataset
 from torchvision import transforms as T
 
 from model import resnet_config, CIFARResNet
+from blocks import ResidualBlock, ResidualBottleneckBlock
 from utils import get_device
 
 from omegaconf import OmegaConf
@@ -259,6 +260,21 @@ def kaiming_init(model: nn.Module) -> None:
             nn.init.ones_(m.weight)
             nn.init.zeros_(m.bias)
             
+            
+def zero_init_residual(model: nn.Module) -> None:
+    """Zero-Init the Residual mappings, as described by He et al.
+
+    Args:
+        model (nn.Module): The model to initialize
+    """
+    for m in model.modules():
+        if isinstance(m, ResidualBlock):
+            if hasattr(m.norm2, "weight"):
+                nn.init.zeros_(m.norm2.weight)
+        elif isinstance(m, ResidualBottleneckBlock):
+            if hasattr(m.norm3, "weight"):
+                nn.init.zeros_(m.norm3.weight)
+    
     
 def build_optimizer(optimizer_conf: OmegaConf, model: nn.Module) -> torch.optim.Optimizer:
     """Build the Optimizer
@@ -470,6 +486,7 @@ def train(cfg: OmegaConf) -> None:
     # Build the model
     model = build_model(cfg)
     kaiming_init(model)
+    zero_init_residual(model)
     model.to(device)
     
     # Get the optimizer
